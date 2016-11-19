@@ -53,7 +53,7 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
   let () = set_verbosity initial_verbosity
   
   let class_counter = ref 0
-  let func_counter = ref 1  (* 0 is reserved for functions declared in preceding modules used by the current module *)
+  let func_counter = ref 0
 
   (** Maps an identifier to a ref cell containing approximately the number of distinct symbols that have been generated for this identifier.
     * It is an approximation because of clashes such as the clash between the second symbol ('foo0') generated for 'foo'
@@ -318,7 +318,7 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
   let ancester_at_symbol = mk_symbol "ancester_at" [ctxt#type_int; ctxt#type_int] ctxt#type_int Uninterp
   let get_class_symbol = mk_symbol "getClass" [ctxt#type_int] ctxt#type_int Uninterp
   let class_serial_number = mk_symbol "class_serial_number" [ctxt#type_int] ctxt#type_int Uninterp
-  let func_rank = mk_symbol "func_rank" [ctxt#type_int] ctxt#type_int Uninterp
+  let func_rank = mk_symbol "func_rank" [ctxt#type_int] ctxt#type_real Uninterp
   let bitwise_or_symbol = mk_symbol "bitor" [ctxt#type_int; ctxt#type_int] ctxt#type_int Uninterp
   let bitwise_xor_symbol = mk_symbol "bitxor" [ctxt#type_int; ctxt#type_int] ctxt#type_int Uninterp
   let bitwise_and_symbol = mk_symbol "bitand" [ctxt#type_int; ctxt#type_int] ctxt#type_int Uninterp
@@ -332,6 +332,8 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
   let truncate_uint16_symbol = mk_symbol "truncate_uint16" [ctxt#type_int] ctxt#type_int Uninterp
   let truncate_int32_symbol = mk_symbol "truncate_int32" [ctxt#type_int] ctxt#type_int Uninterp
   let truncate_uint32_symbol = mk_symbol "truncate_uint32" [ctxt#type_int] ctxt#type_int Uninterp
+  let truncate_int64_symbol = mk_symbol "truncate_int64" [ctxt#type_int] ctxt#type_int Uninterp
+  let truncate_uint64_symbol = mk_symbol "truncate_uint64" [ctxt#type_int] ctxt#type_int Uninterp
   
   let () = ignore $. ctxt#assume (ctxt#mk_eq (ctxt#mk_unboxed_bool (ctxt#mk_boxed_int (ctxt#mk_intlit 0))) ctxt#mk_false) (* This allows us to use 0 as a default value for all types; see the treatment of array creation. *)
 
@@ -626,6 +628,7 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
       * pred_fam_info map (* the is_xyz predicate, if any *)
     type signature = string * type_ list
     type method_info =
+      MethodInfo of
         loc
       * ghostness
       * type_ option
@@ -637,12 +640,14 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
       * asn (* dynamic precondition (= precondition for dynamically bound calls) *)
       * asn (* dynamic postcondition (= postcondition for dynamically bound calls) *)
       * (type_ * asn) list (* dynamic throws clauses *)
-      * (stmt list * loc) option option (* body *)
+      * bool (* terminates *)
+      * ((stmt list * loc) * int (*rank for termination check*)) option option (* body *)
       * method_binding
       * visibility
       * bool (* is override *)
       * bool (* is abstract *)
     type interface_method_info =
+      ItfMethodInfo of
         loc
       * ghostness
       * type_ option (* return type *)
@@ -651,6 +656,7 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
       * type_ map (* type environment after precondition *)
       * asn (* postcondition *)
       * (type_ * asn) list (* throws clauses *)
+      * bool (* terminates *)
       * visibility
       * bool (* is abstract *)
     type field_info = {
@@ -664,13 +670,15 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
         fvalue: constant_value option option ref
       }
     type ctor_info =
+      CtorInfo of
         loc
       * type_ map (* parameters *)
       * asn
       * type_ map
       * asn
       * (type_ * asn) list
-      * (stmt list * loc) option option
+      * bool (* terminates *)
+      * ((stmt list * loc) * int (*rank for termination check*)) option option
       * visibility
     type inst_pred_info =
         loc
@@ -2621,8 +2629,8 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
         in
         let declared_methods =
           flatmap
-            begin fun ((mn', sign), (lm, gh, rt, xmap, pre, pre_tenv, post, epost, pre_dyn, post_dyn, epost_dyn, ss, fb, v, is_override, abstract)) ->
-              if mn' = mn then [(sign, (tn, lm, gh, rt, xmap, pre_dyn, post_dyn, epost_dyn, fb, v, abstract))] else []
+            begin fun ((mn', sign), MethodInfo (lm, gh, rt, xmap, pre, pre_tenv, post, epost, pre_dyn, post_dyn, epost_dyn, terminates, ss, fb, v, is_override, abstract)) ->
+              if mn' = mn then [(sign, (tn, lm, gh, rt, xmap, pre_dyn, post_dyn, epost_dyn, terminates, fb, v, abstract))] else []
             end
             cmeths
         in
@@ -2630,8 +2638,8 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
       | None ->
       let InterfaceInfo (_, fields, meths, _, interfs) = List.assoc tn interfmap in
       let declared_methods = flatmap
-        begin fun ((mn', sign), (lm, gh, rt, xmap, pre, pre_tenv, post, epost, v, abstract)) ->
-          if mn' = mn then [(sign, (tn, lm, gh, rt, xmap, pre, post, epost, Instance, v, abstract))] else []
+        begin fun ((mn', sign), ItfMethodInfo (lm, gh, rt, xmap, pre, pre_tenv, post, epost, terminates, v, abstract)) ->
+          if mn' = mn then [(sign, (tn, lm, gh, rt, xmap, pre, post, epost, terminates, Instance, v, abstract))] else []
         end
         meths
       in
@@ -2675,6 +2683,14 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
     in
     let promote l e1 e2 =
       promote_checkdone l e1 e2 (check e1) (check e2)
+    in
+    let perform_integral_promotion e =
+      let (w, t, _) = check e in
+      let t = unfold_inferred_type t in
+      match t with
+        Int (_, n) when n < int_size -> Upcast (w, t, intType), intType
+      | Int (_, _) -> w, t
+      | _ -> static_error (expr_loc e) "Expression must be of integral type" None
     in
     let check_pure_fun_value_call l w t es =
       if es = [] then static_error l "Zero-argument application of pure function value makes no sense." None;
@@ -2839,12 +2855,8 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
       | _ -> static_error l "Arguments must be of integral type." None
       end
     | Operation (l, BitNot, [e]) ->
-      let (w, t, _) = check e in
-      let t = integer_promotion (unfold_inferred_type t) in
-      begin match t with
-      | Int (_, _) -> (WOperation (l, BitNot, [w], t), t, None)
-      | _ -> static_error l "Argument to bitwise negation must be of an integral type." None
-      end
+      let w, t = perform_integral_promotion e in
+      (WOperation (l, BitNot, [w], t), t, None)
     | Operation (l, (Le | Lt | Ge | Gt as operator), [e1; e2]) -> 
       let (w1, w2, t) = promote l e1 e2 in
       (operation_expr funcmap l t operator w1 w2, boolt, None)
@@ -2883,9 +2895,9 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
       begin match t with PtrType _ -> static_error l "Operands should be arithmetic expressions, not pointer expressions" None | _ -> () end;
       (operation_expr funcmap l t operator w1 w2, t, None)
     | Operation (l, (ShiftLeft | ShiftRight as op), [e1; e2]) ->
-      let w1 = checkt e1 intType in
-      let w2 = checkt e2 intType in
-      (WOperation (l, op, [w1; w2], intType), intType, None)
+      let w1, t1 = perform_integral_promotion e1 in
+      let w2, _ = perform_integral_promotion e2 in
+      (WOperation (l, op, [w1; w2], t1), t1, None)
     | IntLit (l, n, is_decimal, usuffix, lsuffix) ->
       if inAnnotation = Some true then
         (wintlit l n, intt, Some n)
@@ -3039,7 +3051,7 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
         let ms = List.filter (fun (sign, _) -> is_assignable_to_sign inAnnotation argtps sign) ms in
         let make_well_typed_method m =
           match m with
-          (sign, (tn', lm, gh, rt, xmap, pre, post, epost, fb', v, abstract)) ->
+          (sign, (tn', lm, gh, rt, xmap, pre, post, epost, terminates, fb', v, abstract)) ->
             let (fb, es) = if fb = Instance && fb' = Static then (Static, List.tl es) else (fb, es) in
             if fb <> fb' then static_error l "Instance method requires target object" None;
             let rt = match rt with None -> Void | Some rt -> rt in
@@ -3193,7 +3205,7 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
           begin try
             let m =
               List.find
-                begin fun ((mn', sign), (lm, gh, rt, xmap, pre, pre_tenv, post, epost, pre_dyn, post_dyn, epost_dyn, ss, fb, v, is_override, abstract)) ->
+                begin fun ((mn', sign), MethodInfo (lm, gh, rt, xmap, pre, pre_tenv, post, epost, pre_dyn, post_dyn, epost_dyn, terminates, ss, fb, v, is_override, abstract)) ->
                   mn = mn' &&  is_assignable_to_sign inAnnotation argtps sign && not abstract
                 end
                 cmeths
@@ -3216,9 +3228,10 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
         | Some {csuper} ->
             begin match get_implemented_instance_method csuper mn argtps with
               None -> static_error l "No matching method." None
-            | Some(((mn', sign), (lm, gh, rt, xmap, pre, pre_tenv, post, epost, pre_dyn, post_dyn, epost_dyn, ss, fb, v, is_override, abstract))) ->
+            | Some(((mn', sign), MethodInfo (lm, gh, rt, xmap, pre, pre_tenv, post, epost, pre_dyn, post_dyn, epost_dyn, terminates, ss, fb, v, is_override, abstract))) ->
               let tp = match rt with Some(tp) -> tp | _ -> Void in
-              (WSuperMethodCall (l, mn, Var (l, "this") :: wargs, (lm, gh, rt, xmap, pre, post, epost, v)), tp, None)
+              let rank = match ss with Some (Some (_, rank)) -> Some rank | None -> None in
+              (WSuperMethodCall (l, csuper, mn, Var (l, "this") :: wargs, (lm, gh, rt, xmap, pre, post, epost, terminates, rank, v)), tp, None)
             end
         end
       end 
@@ -3307,7 +3320,7 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
         | (ObjType _, ObjType _) when isCast -> w
         | (PtrType _, Int (Unsigned, 4)) when isCast -> w
         | (Int (Unsigned, 4), PtrType _) when isCast -> w
-        | ((Int (Signed, 4)|Int (Unsigned, 4)|Int (Signed, 2)|Int (Unsigned, 2)|Int (Signed, 1)|Int (Unsigned, 1)), (Int (Signed, 4)|Int (Unsigned, 4)|Int (Signed, 2)|Int (Unsigned, 2)|Int (Signed, 1)|Int (Unsigned, 1))) when isCast -> w
+        | (Int (_, _), Int (_, _)) when isCast -> w
         | ((Int (Signed, 4)|Int (Unsigned, 4)|Float|Double|LongDouble), (Float|Double|LongDouble)) -> floating_point_fun_call_expr funcmap (expr_loc w) t0 ("of_" ^ identifier_string_of_type t) [TypedExpr (w, t)]
         | ((Float|Double|LongDouble), (Int (Signed, 4)|Int (Unsigned, 4))) -> floating_point_fun_call_expr funcmap (expr_loc w) t0 ("of_" ^ identifier_string_of_type t) [TypedExpr (w, t)]
         | (ObjType ("java.lang.Object"), ArrayType _) when isCast -> w
@@ -3483,10 +3496,15 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
                   if List.mem_assoc g' fpm_todo then static_error l "A fixpoint function cannot call a fixpoint function that appears later in the program text" None;
                   if g' = g then begin
                     match List.nth args index with
-                      WVar (l, x, LocalVar) when List.mem x components -> ()
+                      WVar (l, x, LocalVar) when List.mem x components -> List.iter iter1 args
                     | _ -> static_error l "Inductive argument of recursive call must be switch clause pattern variable." None
                   end;
                   List.iter iter1 args
+                | WPureFunValueCall (l, WVar (l', g', PureFuncName), args) when g' = g && List.length args > index ->
+                  begin match List.nth args index with
+                    WVar (l'', x, LocalVar) when List.mem x components -> List.iter iter1 args
+                  | _ -> static_error l "Inductive argument of recursive call must be switch clause pattern variable." None
+                  end
                 | WVar (l, g', PureFuncName) ->
                   if List.mem_assoc g' fpm_todo then static_error l "A fixpoint function cannot mention a fixpoint function that appears later in the program text" None;
                   if g' = g then static_error l "A fixpoint function that mentions itself is not yet supported." None
@@ -4540,9 +4558,8 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
 
   let rec sizeof l t =
     match t with
-      Void | Int (Signed, 1) | Int (Unsigned, 1) -> ctxt#mk_intlit 1
-    | Int (Signed, 2) | Int (Unsigned, 2) -> ctxt#mk_intlit 2
-    | Int (Signed, 4) | Int (Unsigned, 4) -> ctxt#mk_intlit 4
+      Void -> ctxt#mk_intlit 1
+    | Int (_, n) -> ctxt#mk_intlit n
     | PtrType _ -> ctxt#mk_intlit 4
     | StructType sn -> struct_size sn
     | StaticArrayType (elemTp, elemCount) -> ctxt#mk_mul (sizeof l elemTp) (ctxt#mk_intlit elemCount)
@@ -5136,7 +5153,7 @@ let check_if_list_is_defined () =
           if ass_term <> None && not (le_big_int zero_big_int n &&
 le_big_int n max_ptr_big_int) then static_error l "CastExpr: Int literal is out of range." None;
           cont state (ctxt#mk_intlit_of_string (string_of_big_int n))
-        | (e, (Int (Signed, 1)|Int (Unsigned, 1)|Int (Signed, 2)|Int (Unsigned, 2)|Int (Signed, 4)|Int (Unsigned, 4) as tp), false) ->
+        | (e, (Int (_, _) as tp), false) ->
           ev state e $. fun state t ->
           let min, max = limits_of_type tp in
           cont state (check_overflow l min t max)
@@ -5158,6 +5175,12 @@ le_big_int n max_ptr_big_int) then static_error l "CastExpr: Int literal is out 
         | (e, Int (Unsigned, 4), true) ->
           ev state e $. fun state t ->
           cont state (ctxt#mk_app truncate_uint32_symbol [t])
+        | (e, Int (Signed, 8), true) ->
+          ev state e $. fun state t ->
+          cont state (ctxt#mk_app truncate_int64_symbol [t])
+        | (e, Int (Unsigned, 8), true) ->
+          ev state e $. fun state t ->
+          cont state (ctxt#mk_app truncate_uint64_symbol [t])
         | (e_, _, true) ->
           static_error l "Unsupported truncating cast" None
         | (_, (ObjType _|ArrayType _), _) when ass_term = None -> static_error l "Class casts are not allowed in annotations." None

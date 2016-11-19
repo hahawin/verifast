@@ -284,6 +284,9 @@ cd examples
     verifast_both -c SpouseFinal.java
     verifast_both -c Stack.java
     verifast_both -c -disable_overflow_check -provides "main_class Program" StaticFields.java
+    cd termination
+      mysh < termination.mysh
+    cd ..
     verifast_both -c ThreadRun.java
     verifast_both -c Tree.java
     verifast_both -c StringLiterals.java
@@ -350,6 +353,7 @@ cd tutorial_solutions
   verifast_both -c -disable_overflow_check predctors.c
   verifast_both -c -disable_overflow_check threads0.c
   verifast_both -c -disable_overflow_check threads.c
+  verifast_both -c -disable_overflow_check fractions0.c
   verifast_both -c -disable_overflow_check fractions.c
   verifast_both -c -disable_overflow_check precise.c
   verifast_both -c -disable_overflow_check precise_bad_merge.c
@@ -378,6 +382,7 @@ cd tests
   cd copredicates
     mysh < run.mysh
   cd ..
+  verifast_both -c prodlemfuncptrchunk_local_lems.c
   cd lemma_ptrs_with_nonghostcallersonly
     mysh < run.mysh
   cd ..
